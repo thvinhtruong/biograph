@@ -1,0 +1,37 @@
+vault:
+  path: "/Users/truongvinh/university/tudarmstadt/master/biograph/vault"
+  entity_dir: "entities"
+  source_dir: "sources"
+
+database:
+  path: "./biograph.db"
+
+search:
+  bleve_index_path: "./biograph.bleve"
+  bleve_confidence_threshold: 0.5
+  llm_fallback_enabled: true
+
+activation:
+  max_hops: 2
+  min_energy: 0.05
+  decay_per_hop: 0.7
+  max_context_nodes: 20
+  max_context_tokens: 6000
+
+plasticity:
+  reinforcement_alpha: 0.05
+  sigmoid_center: 0.5
+  decay_enabled: true
+  decay_interval: "24h"
+
+llm:
+  provider: "anthropic"            # Options: anthropic, openai, ollama
+  model: "claude-haiku-4-5-20251001"
+  vlm_model: "claude-haiku-4-5-20251001"
+  api_key_env: "ANTHROPIC_API_KEY"
+  max_retries: 3
+
+ingestion:
+  workers: 8
+  force_vlm: false
+  pdftotext_path: "pdftotext"      # Requires: brew install poppler
