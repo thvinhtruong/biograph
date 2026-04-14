@@ -58,13 +58,13 @@ github.com/truongvinh/biograph   (Go 1.25.1)
 | `github.com/spf13/viper` | YAML config loading |
 | `github.com/mattn/go-sqlite3` | SQLite driver (CGo, includes FTS5) |
 | `github.com/blevesearch/bleve/v2` | BM25/TF-IDF full-text search index |
+| `github.com/ledongthuc/pdf` | Pure Go PDF text extraction (no external binary) |
+| `github.com/pdfcpu/pdfcpu` | Pure Go PDF page splitting for VLM input |
 | `github.com/pkoukk/tiktoken-go` | Token counting for context packing |
 | `github.com/rs/zerolog` | Structured logging |
 | `github.com/schollz/progressbar/v3` | CLI progress bars |
 
-External tools (not Go packages):
-- `pdftotext` + `pdfinfo` — from `brew install poppler`. Required for text extraction.
-- `ollama` — optional, for local LLM inference.
+No external system binaries required. The only CGo dependency is `go-sqlite3` (SQLite). `ollama` is optional for local inference.
 
 ## Architecture
 
@@ -75,9 +75,9 @@ Obsidian Vault (.md files)
 biograph CLI (Cobra)
         │
         ├── ingest → ingestion.Pipeline
-        │               ├── TextExtractor   (pdftotext, page by page)
+        │               ├── TextExtractor   (ledongthuc/pdf — pure Go, no binary)
         │               ├── PageClassifier  (heuristics: LaTeX / tables / images)
-        │               ├── VLMWorker       (fan-out/fan-in pool → LLM API)
+        │               ├── VLMWorker       (fan-out/fan-in pool; pdfcpu extracts single-page PDF → LLM API)
         │               ├── storage.DB      (SQLite upsert nodes + edges)
         │               ├── search.Index    (Bleve index node)
         │               └── MarkdownWriter  (write/update .md in vault)
@@ -128,7 +128,7 @@ internal/storage/edges.go         UpsertEdge, GetNeighbors (bidirectional), Upda
                                   DecayEdgesForCourse, DecayAllEdges, decayFactor()
 
 internal/ingestion/pipeline.go    Pipeline.Run() — top-level orchestration
-internal/ingestion/text_extractor.go  pdftotext page extraction; pageCount via pdfinfo/pdfcpu
+internal/ingestion/text_extractor.go  Pure Go text extraction via ledongthuc/pdf; ExtractPagePDF() via pdfcpu
 internal/ingestion/page_classifier.go IsSimple() heuristics; textToExtractedContent()
 internal/ingestion/vlm_worker.go  ProcessPages() fan-out/fan-in; buildExtractionPrompt()
 internal/ingestion/markdown_writer.go WriteEntity(), WriteSource(), renderEntityNote()
@@ -141,9 +141,11 @@ internal/graph/activation.go      ActivationEngine.Activate() — concurrent hop
 internal/graph/context_packer.go  ContextPacker.Pack() — token-budget assembly with tiktoken
 internal/graph/plasticity.go      PlasticityManager.RunDecay(); SigmoidUpdate()
 
-internal/llm/client.go            Client.Answer(), Extract(), Route() — dispatches to provider
-                                  anthropicComplete / openaiComplete / ollamaComplete
-                                  doWithRetry() — exponential backoff
+internal/llm/client.go            Client.Answer(), Extract(), ExtractPage(), Route()
+                                  anthropicComplete / geminiComplete / openaiComplete / ollamaComplete
+                                  ExtractPage() sends base64 PDF to Anthropic/Gemini natively;
+                                  falls back to text for OpenAI/Ollama
+                                  doWithRetry() — exponential backoff, re-reads body on retry
 ```
 
 ## SQLite schema
@@ -202,13 +204,18 @@ Computed in `storage.decayFactor(daysUntilExam)`:
 
 Controlled by `llm.provider` in `biograph.yaml`:
 
-| Value | API | Env var |
-|-------|-----|---------|
-| `anthropic` | `api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY` |
-| `openai` | `api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` |
-| `ollama` | `localhost:11434/api/generate` | *(none)* |
+| Value | API endpoint | Env var | PDF input |
+|-------|-------------|---------|-----------|
+| `anthropic` | `api.anthropic.com/v1/messages` | `ANTHROPIC_API_KEY` | Native (document block) |
+| `gemini` | `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` | `GEMINI_API_KEY` | Native (inline_data) |
+| `openai` | `api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | Falls back to text |
+| `ollama` | `localhost:11434/api/generate` | *(none)* | Falls back to text |
 
 Default model: `claude-haiku-4-5-20251001`. Change via `llm.model` and `llm.vlm_model`.
+
+For Gemini, the default model is `gemini-2.0-flash` when `llm.model` is unset.
+
+**VLM page flow:** `VLMWorker.processPage` calls `ExtractPagePDF` (pdfcpu) to get a single-page PDF as `[]byte`, base64-encodes it, then calls `llm.Client.ExtractPage`. Anthropic receives it as a `document` content block; Gemini as `inline_data`. OpenAI and Ollama fall through to the text-only `Extract` path.
 
 ## Page classifier heuristics
 
@@ -242,9 +249,9 @@ Entity notes have YAML frontmatter with `id`, `display_name`, `category`, `cours
 ## Environment
 
 - macOS (darwin/amd64 confirmed)
-- `CGO_ENABLED=1` is mandatory at build time
-- `ANTHROPIC_API_KEY` must be set at runtime (or `OPENAI_API_KEY` / Ollama running)
-- `pdftotext` must be on `$PATH` (or set `ingestion.pdftotext_path` to the full path)
+- `CGO_ENABLED=1` is mandatory at build time (required by `go-sqlite3`)
+- One of `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` must be set at runtime (or Ollama running locally)
+- No external system binaries required — PDF processing is entirely in-process
 
 ## Common pitfalls
 
@@ -253,3 +260,6 @@ Entity notes have YAML frontmatter with `id`, `display_name`, `category`, `cours
 - The FTS5 sync triggers fire on SQLite INSERT/UPDATE/DELETE. Do not bypass them with direct `sqlite3` CLI edits, or the FTS index will be stale.
 - `GetNeighbors` returns both directions of an edge. Spreading activation therefore naturally propagates in both directions — do not add a separate reverse-traversal pass.
 - The LLM router receives the top 50 nodes by average edge weight as candidates. If the graph is empty, it returns an error immediately — ingest at least one PDF before querying.
+- `doWithRetry` re-reads the request body from the `body []byte` arg on each retry — do not rely on `req.Body` being replayable after the first attempt.
+- For Gemini, the API key is always read from `GEMINI_API_KEY` regardless of `llm.api_key_env` (which only applies to Anthropic). OpenAI always reads `OPENAI_API_KEY`.
+- `ExtractPagePDF` (pdfcpu `Trim`) writes to an `io.Writer` in-memory — no temp files are created. If pdfcpu fails on a malformed page, `processPage` logs a warning and retries with the text-only `Extract` path — never surfaces an error to the user.

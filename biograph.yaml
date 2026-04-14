@@ -25,13 +25,24 @@ plasticity:
   decay_interval: "24h"
 
 llm:
-  provider: "anthropic"            # Options: anthropic, openai, ollama
+  # Providers: anthropic | openai | gemini | ollama
+  provider: "anthropic"
   model: "claude-haiku-4-5-20251001"
   vlm_model: "claude-haiku-4-5-20251001"
-  api_key_env: "ANTHROPIC_API_KEY"
+  api_key_env: "ANTHROPIC_API_KEY"   # env var name to read the key from
   max_retries: 3
 
+  # Provider-specific env vars (set whichever you use):
+  #   Anthropic → ANTHROPIC_API_KEY
+  #   OpenAI    → OPENAI_API_KEY
+  #   Gemini    → GEMINI_API_KEY
+  #   Ollama    → (none — runs locally on localhost:11434)
+
+  # Gemini example:
+  # provider: "gemini"
+  # model: "gemini-2.0-flash"
+  # vlm_model: "gemini-2.0-flash"
+
 ingestion:
-  workers: 8
-  force_vlm: false
-  pdftotext_path: "pdftotext"      # Requires: brew install poppler
+  workers: 8          # concurrent VLM workers (default: num CPU)
+  force_vlm: false    # true = send every page to VLM regardless of classifier

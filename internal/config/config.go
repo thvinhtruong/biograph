@@ -58,10 +58,9 @@ type LLMConfig struct {
 }
 
 type IngestionConfig struct {
-	Workers         int    `mapstructure:"workers"`
-	ForceVLM        bool   `mapstructure:"force_vlm"`
-	PDFToTextPath   string `mapstructure:"pdftotext_path"`
-	DefaultCourse   string `mapstructure:"default_course"`
+	Workers       int    `mapstructure:"workers"`
+	ForceVLM      bool   `mapstructure:"force_vlm"`
+	DefaultCourse string `mapstructure:"default_course"`
 }
 
 // Load reads config from Viper and applies defaults.
@@ -100,7 +99,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("llm.max_retries", 3)
 	v.SetDefault("ingestion.workers", runtime.NumCPU())
 	v.SetDefault("ingestion.force_vlm", false)
-	v.SetDefault("ingestion.pdftotext_path", "pdftotext")
 }
 
 func applyDerivedDefaults(cfg *Config) {

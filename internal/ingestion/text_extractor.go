@@ -1,11 +1,13 @@
 package ingestion
 
 import (
+	"bytes"
 	"fmt"
-	"os/exec"
-	"strconv"
+	"os"
 	"strings"
 
+	"github.com/ledongthuc/pdf"
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/truongvinh/biograph/internal/config"
 )
 
@@ -15,7 +17,8 @@ type PageText struct {
 	Text       string
 }
 
-// TextExtractor uses pdftotext (poppler) to extract text from a PDF.
+// TextExtractor uses pure Go libraries to extract text from a PDF.
+// No external binaries required — ledongthuc/pdf for text, pdfcpu for page splitting.
 type TextExtractor struct {
 	cfg *config.Config
 }
@@ -25,78 +28,63 @@ func NewTextExtractor(cfg *config.Config) *TextExtractor {
 }
 
 // ExtractAll extracts text from every page of a PDF.
-// Uses pdftotext -f <page> -l <page> to process page by page.
 func (e *TextExtractor) ExtractAll(pdfPath string) ([]PageText, error) {
-	// First, get page count
-	nPages, err := e.pageCount(pdfPath)
+	f, r, err := pdf.Open(pdfPath)
 	if err != nil {
-		return nil, fmt.Errorf("page count: %w", err)
+		return nil, fmt.Errorf("open pdf: %w", err)
 	}
+	defer f.Close()
 
-	pages := make([]PageText, 0, nPages)
-	for i := 1; i <= nPages; i++ {
-		text, err := e.extractPage(pdfPath, i)
-		if err != nil {
-			// Non-fatal: include empty text so classifier can flag it
-			pages = append(pages, PageText{PageNumber: i, Text: ""})
-			continue
-		}
-		pages = append(pages, PageText{PageNumber: i, Text: text})
+	numPages := r.NumPage()
+	pages := make([]PageText, 0, numPages)
+	for i := 1; i <= numPages; i++ {
+		pages = append(pages, PageText{
+			PageNumber: i,
+			Text:       extractPageText(r, i),
+		})
 	}
 	return pages, nil
 }
 
-func (e *TextExtractor) extractPage(pdfPath string, page int) (string, error) {
-	pdftotext := e.cfg.Ingestion.PDFToTextPath
-	if pdftotext == "" {
-		pdftotext = "pdftotext"
-	}
-
-	pageStr := strconv.Itoa(page)
-	// -f first page, -l last page, - for stdout
-	cmd := exec.Command(pdftotext, "-f", pageStr, "-l", pageStr, "-enc", "UTF-8", pdfPath, "-")
-	out, err := cmd.Output()
+// ExtractPagePDF extracts a single page from a PDF as a self-contained PDF
+// byte slice using pdfcpu. This is sent to vision models instead of a
+// rendered PNG — Claude and Gemini both accept raw PDF content natively.
+func ExtractPagePDF(pdfPath string, pageNum int) ([]byte, error) {
+	f, err := os.Open(pdfPath)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("open pdf: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	defer f.Close()
+
+	var buf bytes.Buffer
+	pages := []string{fmt.Sprintf("%d", pageNum)}
+	if err := pdfcpuapi.Trim(f, &buf, pages, nil); err != nil {
+		return nil, fmt.Errorf("extract page %d: %w", pageNum, err)
+	}
+	return buf.Bytes(), nil
 }
 
-func (e *TextExtractor) pageCount(pdfPath string) (int, error) {
-	// Use pdfinfo if available, fall back to pdftotext page scan
-	cmd := exec.Command("pdfinfo", pdfPath)
-	out, err := cmd.Output()
-	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.HasPrefix(line, "Pages:") {
-				parts := strings.Fields(line)
-				if len(parts) == 2 {
-					return strconv.Atoi(parts[1])
-				}
-			}
-		}
+// extractPageText pulls plain text from one page via ledongthuc/pdf.
+func extractPageText(r *pdf.Reader, pageNum int) string {
+	page := r.Page(pageNum)
+	if page.V.IsNull() {
+		return ""
 	}
 
-	// Fallback: try pdfcpu
-	return e.pageCountViaPDFCPU(pdfPath)
-}
-
-func (e *TextExtractor) pageCountViaPDFCPU(pdfPath string) (int, error) {
-	cmd := exec.Command("pdfcpu", "info", pdfPath)
-	out, err := cmd.Output()
+	// GetTextByRow preserves reading order better than GetPlainText
+	rows, err := page.GetTextByRow()
 	if err != nil {
-		// Last resort: assume 1
-		return 1, nil
+		text, _ := page.GetPlainText(nil)
+		return strings.TrimSpace(text)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "Page count") {
-			parts := strings.Fields(line)
-			for _, p := range parts {
-				if n, err := strconv.Atoi(p); err == nil {
-					return n, nil
-				}
-			}
+
+	var sb strings.Builder
+	for _, row := range rows {
+		for _, word := range row.Content {
+			sb.WriteString(word.S)
+			sb.WriteString(" ")
 		}
+		sb.WriteString("\n")
 	}
-	return 1, nil
+	return strings.TrimSpace(sb.String())
 }

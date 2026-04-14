@@ -13,12 +13,12 @@ import (
 
 // ExtractedContent is the structured output from a VLM call for one page.
 type ExtractedContent struct {
-	PageNumber     int            `json:"page_number"`
-	ContentSummary string         `json:"content_summary"`
-	Entities       []EntityDraft  `json:"entities"`
+	PageNumber     int             `json:"page_number"`
+	ContentSummary string          `json:"content_summary"`
+	Entities       []EntityDraft   `json:"entities"`
 	Relationships  []RelationDraft `json:"relationships"`
-	RawLatex       []string       `json:"raw_latex"`
-	VisualContext  string         `json:"visual_context"`
+	RawLatex       []string        `json:"raw_latex"`
+	VisualContext  string          `json:"visual_context"`
 }
 
 // EntityDraft is a VLM-extracted entity before storage.
@@ -51,9 +51,9 @@ func NewVLMWorker(cfg *config.Config) *VLMWorker {
 }
 
 type pageJob struct {
-	page     PageText
-	course   string
-	examDate string
+	page    PageText
+	pdfPath string
+	course  string
 }
 
 type pageResult struct {
@@ -62,7 +62,9 @@ type pageResult struct {
 }
 
 // ProcessPages runs the fan-out/fan-in VLM pipeline.
-func (w *VLMWorker) ProcessPages(pages []PageText, course, examDate string) ([]ExtractedContent, error) {
+// pdfPath is the source PDF file — each complex page is extracted as a
+// single-page PDF byte slice and sent natively to the vision model.
+func (w *VLMWorker) ProcessPages(pages []PageText, pdfPath, course, examDate string) ([]ExtractedContent, error) {
 	numWorkers := w.cfg.Ingestion.Workers
 	if numWorkers <= 0 {
 		numWorkers = 4
@@ -71,26 +73,23 @@ func (w *VLMWorker) ProcessPages(pages []PageText, course, examDate string) ([]E
 	jobs := make(chan pageJob, len(pages))
 	results := make(chan pageResult, len(pages))
 
-	// Fan-out: spawn worker goroutines
 	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
+	for range numWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				ec, err := w.processPage(job.page, job.course, job.examDate)
+				ec, err := w.processPage(job.page, job.pdfPath, job.course)
 				results <- pageResult{content: ec, err: err}
 			}
 		}()
 	}
 
-	// Feed jobs
 	for _, p := range pages {
-		jobs <- pageJob{page: p, course: course, examDate: examDate}
+		jobs <- pageJob{page: p, pdfPath: pdfPath, course: course}
 	}
 	close(jobs)
 
-	// Fan-in: collect after all workers done
 	go func() {
 		wg.Wait()
 		close(results)
@@ -107,7 +106,6 @@ func (w *VLMWorker) ProcessPages(pages []PageText, course, examDate string) ([]E
 		contents = append(contents, r.content)
 	}
 
-	// Sort by page number to preserve reading order
 	sort.Slice(contents, func(i, j int) bool {
 		return contents[i].PageNumber < contents[j].PageNumber
 	})
@@ -115,34 +113,53 @@ func (w *VLMWorker) ProcessPages(pages []PageText, course, examDate string) ([]E
 	if len(contents) == 0 && lastErr != nil {
 		return nil, fmt.Errorf("all VLM calls failed: %w", lastErr)
 	}
-
 	return contents, nil
 }
 
-func (w *VLMWorker) processPage(pt PageText, course, examDate string) (ExtractedContent, error) {
+func (w *VLMWorker) processPage(pt PageText, pdfPath, course string) (ExtractedContent, error) {
+	// Extract this page as a standalone PDF byte slice (no external tool needed)
+	pageBytes, err := ExtractPagePDF(pdfPath, pt.PageNumber)
+	if err != nil {
+		log.Warn().Err(err).Int("page", pt.PageNumber).Msg("page PDF extraction failed, falling back to text prompt")
+		// Graceful fallback: send text-based prompt
+		return w.processPageText(pt, course)
+	}
+
+	prompt := buildExtractionPrompt(pt.Text, course)
+	response, err := w.client.ExtractPage(pageBytes, pt.PageNumber, prompt)
+	if err != nil {
+		return ExtractedContent{PageNumber: pt.PageNumber}, err
+	}
+	return parseExtractionResponse(response, pt.PageNumber), nil
+}
+
+// processPageText is the text-only fallback for when PDF byte extraction fails.
+func (w *VLMWorker) processPageText(pt PageText, course string) (ExtractedContent, error) {
 	prompt := buildExtractionPrompt(pt.Text, course)
 	response, err := w.client.Extract(prompt)
 	if err != nil {
 		return ExtractedContent{PageNumber: pt.PageNumber}, err
 	}
+	return parseExtractionResponse(response, pt.PageNumber), nil
+}
 
+func parseExtractionResponse(response string, pageNum int) ExtractedContent {
 	var ec ExtractedContent
 	if err := json.Unmarshal([]byte(response), &ec); err != nil {
-		// If JSON parse fails, return minimal content
 		return ExtractedContent{
-			PageNumber:     pt.PageNumber,
+			PageNumber:     pageNum,
 			ContentSummary: truncateText(response, 500),
-		}, nil
+		}
 	}
-	ec.PageNumber = pt.PageNumber
-	return ec, nil
+	ec.PageNumber = pageNum
+	return ec
 }
 
 func buildExtractionPrompt(pageText, course string) string {
 	return fmt.Sprintf(`You are an expert academic knowledge extractor. Extract entities and relationships from this lecture page.
 
 Course: %s
-Page content:
+Page content (text layer):
 ---
 %s
 ---

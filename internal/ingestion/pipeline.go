@@ -86,7 +86,7 @@ func (p *Pipeline) Run(opts Options) (*Result, error) {
 	// Complex pages: VLM worker pool
 	if len(complexPages) > 0 {
 		vlmWorker := NewVLMWorker(p.cfg)
-		vlmResults, err := vlmWorker.ProcessPages(complexPages, opts.Course, opts.ExamDate)
+		vlmResults, err := vlmWorker.ProcessPages(complexPages, opts.PDFPath, opts.Course, opts.ExamDate)
 		if err != nil {
 			log.Warn().Err(err).Msg("VLM processing failed, falling back to text")
 			// Fallback: treat as simple
