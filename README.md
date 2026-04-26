@@ -11,6 +11,87 @@ A Go CLI tool that builds an associative knowledge graph from lecture PDFs, stor
 
 ---
 
+## Core technology
+
+### Spreading activation
+
+When you ask a question, BioGraph does not do a flat keyword search. It finds one or more starting nodes (via BM25 or an LLM router), then simulates energy flowing outward through the graph like a neural signal spreading through a brain.
+
+Each hop multiplies the energy by the edge weight and a per-hop decay factor:
+
+```
+transfer = current_energy × edge_weight × decay_per_hop
+```
+
+Nodes reachable from *multiple* starting nodes accumulate energy from every path that reaches them. Those intersection nodes end up with the highest scores and appear first in the LLM context — because a concept that bridges several relevant starting points is likely what the question is actually about.
+
+Paths below `min_energy` (default 0.05) are pruned immediately, so the traversal stays bounded even in a large graph.
+
+---
+
+### Sigmoid-bounded Hebbian learning
+
+After every answered query, BioGraph reinforces the edges between co-activated nodes. The update rule is:
+
+```
+w_new = 1 / (1 + exp(-(w_old + α − c)))
+```
+
+where `α = 0.05` (reinforcement rate) and `c = 0.5` (sigmoid center). This is a **bounded Hebbian rule**: edges that fire together get stronger, but the sigmoid function prevents any weight from ever reaching 1.0 or 0.0.
+
+#### How the sigmoid shapes learning
+
+The key insight is that the formula maps `w_old` through a sigmoid whose inflection point sits at `c − α = 0.45`. This creates three distinct regimes:
+
+| `w_old` range | Behaviour | Why |
+|---------------|-----------|-----|
+| Near 0 | Weight rises quickly toward ~0.39 | Sigmoid output is well above input in this region |
+| ~0.5 | Small positive nudge (+0.012) | Near the inflection — change is fastest here |
+| Near 1 | Weight pulled *back* toward ~0.61 | Sigmoid output is below input; acts as a ceiling |
+
+The function has a stable **fixed point** at approximately `w ≈ 0.51`. No matter where a weight starts, repeated reinforcement pulls it toward this attractor — never to 1.0, never stuck at 0. This means:
+
+- A new edge (weight 0.5 by default) gets a small boost each time it fires.
+- A well-established edge cannot dominate; it stays bounded near 0.51.
+- A dormant edge (low weight from decay) recovers slowly when reactivated.
+
+#### Visualising the attractor
+
+```
+w_old   →   w_new    change
+─────────────────────────────
+0.00    →   0.39     +0.39   ↑ rapid recovery
+0.10    →   0.45     +0.35   ↑
+0.30    →   0.49     +0.19   ↑
+0.50    →   0.51     +0.01   ↑ (barely above fixed point)
+0.51    →   0.51      0.00   ← fixed point
+0.60    →   0.54     −0.06   ↓ soft ceiling
+0.80    →   0.57     −0.23   ↓
+0.99    →   0.63     −0.36   ↓ strong pull-back
+```
+
+The slope is steepest near the fixed point, which means the rule is most sensitive to the difference between frequently-fired and rarely-fired edges precisely in the range that matters for ranking — neither brand-new nor burned-in.
+
+---
+
+### Exam-aware temporal decay
+
+Edge weights decay between study sessions at a rate that depends on how close the next exam is:
+
+| Days until exam | Decay factor | Effect per day |
+|-----------------|-------------|---------------|
+| > 30 | 0.999 | Slow long-term forgetting |
+| 7 – 30 | 0.9999 | Near-zero decay during exam prep |
+| 0 – 7 | 1.000 | Frozen — weights preserved exactly |
+| −7 to 0 | 0.995 | Gentle post-exam cooldown |
+| < −7 | 0.980 | Aggressive cleanup of stale material |
+
+Decay is applied after every `ask` query. Because decay is multiplicative and bounded below at 0.01, no edge disappears entirely — but concepts from a finished course gradually fade unless revisited.
+
+The combination of Hebbian reinforcement (pulls toward 0.51) and temporal decay (multiplies weight downward) means the steady-state weight of an edge reflects actual query frequency against the exam timeline, not just how many times it was originally ingested.
+
+---
+
 ## Flow diagrams
 
 ### Ingest pipeline

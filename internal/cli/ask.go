@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/truongvinh/biograph/internal/config"
@@ -80,6 +81,17 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		activatedIDs[i] = n.ID
 	}
 	engine.Reinforce(activatedIDs)
+
+	// Step 6: Log query for audit trail
+	if err := db.LogQuery(query, activatedIDs); err != nil {
+		log.Warn().Err(err).Msg("query log failed")
+	}
+
+	// Step 7: Apply exam-aware temporal decay
+	pm := graph.NewPlasticityManager(db, cfg)
+	if err := pm.RunDecay(); err != nil {
+		log.Warn().Err(err).Msg("temporal decay failed")
+	}
 
 	fmt.Println(answer)
 	fmt.Printf("\nSources: %s\n", strings.Join(startNodes, ", "))

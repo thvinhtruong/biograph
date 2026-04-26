@@ -4,13 +4,52 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"math"
-	"unsafe"
 
 	"github.com/rs/zerolog/log"
 	"github.com/truongvinh/biograph/internal/config"
 	"github.com/truongvinh/biograph/internal/storage"
 )
+
+// energyMap is a goroutine-safe float64 accumulator keyed by node ID.
+type energyMap struct {
+	mu sync.Mutex
+	m  map[string]float64
+}
+
+func newEnergyMap() *energyMap {
+	return &energyMap{m: make(map[string]float64)}
+}
+
+func (em *energyMap) seed(id string, val float64) {
+	em.mu.Lock()
+	em.m[id] = val
+	em.mu.Unlock()
+}
+
+func (em *energyMap) add(id string, delta float64) {
+	em.mu.Lock()
+	em.m[id] += delta
+	em.mu.Unlock()
+}
+
+func (em *energyMap) get(id string) float64 {
+	em.mu.Lock()
+	v := em.m[id]
+	em.mu.Unlock()
+	return v
+}
+
+func (em *energyMap) collectAbove(threshold float64) []string {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	var ids []string
+	for id, e := range em.m {
+		if e >= threshold {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
 
 // ActivatedNode is a node with its accumulated activation energy.
 type ActivatedNode struct {
@@ -42,18 +81,16 @@ func (e *ActivationEngine) Activate(startNodeIDs []string) ([]ActivatedNode, err
 	decayPerHop := e.cfg.Activation.DecayPerHop
 	maxNodes := e.cfg.Activation.MaxContextNodes
 
-	// energyMap: NodeID → float64 (using sync.Map for goroutine safety)
-	var energyMap sync.Map
+	em := newEnergyMap()
 
 	// Seed starting nodes with energy = 1.0
 	for _, id := range startNodeIDs {
-		energyMap.Store(id, 1.0)
+		em.seed(id, 1.0)
 	}
 
 	// Traverse hop by hop
-	for hop := 0; hop < maxHops; hop++ {
-		// Collect current frontier (nodes above minEnergy threshold)
-		frontier := collectAboveThreshold(&energyMap, minEnergy)
+	for range maxHops {
+		frontier := em.collectAbove(minEnergy)
 		if len(frontier) == 0 {
 			break
 		}
@@ -63,7 +100,7 @@ func (e *ActivationEngine) Activate(startNodeIDs []string) ([]ActivatedNode, err
 			wg.Add(1)
 			go func(nid string) {
 				defer wg.Done()
-				currentEnergy := loadEnergy(&energyMap, nid)
+				currentEnergy := em.get(nid)
 
 				neighbors, err := e.db.GetNeighbors(nid)
 				if err != nil {
@@ -74,9 +111,9 @@ func (e *ActivationEngine) Activate(startNodeIDs []string) ([]ActivatedNode, err
 				for _, nb := range neighbors {
 					transfer := currentEnergy * nb.Weight * decayPerHop
 					if transfer < minEnergy {
-						continue // prune weak paths
+						continue
 					}
-					atomicAddEnergy(&energyMap, nb.NodeID, transfer)
+					em.add(nb.NodeID, transfer)
 				}
 			}(nodeID)
 		}
@@ -84,7 +121,7 @@ func (e *ActivationEngine) Activate(startNodeIDs []string) ([]ActivatedNode, err
 	}
 
 	// Collect all activated nodes (above threshold)
-	activated := collectAboveThreshold(&energyMap, minEnergy)
+	activated := em.collectAbove(minEnergy)
 	if len(activated) == 0 {
 		return nil, fmt.Errorf("spreading activation produced no results")
 	}
@@ -96,7 +133,7 @@ func (e *ActivationEngine) Activate(startNodeIDs []string) ([]ActivatedNode, err
 	}
 	pairs := make([]pair, 0, len(activated))
 	for _, id := range activated {
-		pairs = append(pairs, pair{id: id, energy: loadEnergy(&energyMap, id)})
+		pairs = append(pairs, pair{id: id, energy: em.get(id)})
 	}
 	sort.Slice(pairs, func(i, j int) bool {
 		return pairs[i].energy > pairs[j].energy
@@ -130,75 +167,24 @@ func (e *ActivationEngine) Activate(startNodeIDs []string) ([]ActivatedNode, err
 }
 
 // Reinforce applies Hebbian sigmoid updates to all co-activated node pairs.
+// Both stored edge directions (i→j and j→i) are checked and updated.
 func (e *ActivationEngine) Reinforce(activatedIDs []string) {
 	alpha := e.cfg.Plasticity.ReinforcementAlpha
 	center := e.cfg.Plasticity.SigmoidCenter
 
-	for i := 0; i < len(activatedIDs); i++ {
+	for i := range activatedIDs {
 		for j := i + 1; j < len(activatedIDs); j++ {
-			edge, _ := e.db.GetEdge(activatedIDs[i], activatedIDs[j])
-			if edge != nil {
-				if err := e.db.UpdateEdgeWeight(activatedIDs[i], activatedIDs[j], alpha, center); err != nil {
+			src, dst := activatedIDs[i], activatedIDs[j]
+			if edge, _ := e.db.GetEdge(src, dst); edge != nil {
+				if err := e.db.UpdateEdgeWeight(src, dst, alpha, center); err != nil {
+					log.Warn().Err(err).Msg("edge weight update failed")
+				}
+			}
+			if edge, _ := e.db.GetEdge(dst, src); edge != nil {
+				if err := e.db.UpdateEdgeWeight(dst, src, alpha, center); err != nil {
 					log.Warn().Err(err).Msg("edge weight update failed")
 				}
 			}
 		}
 	}
-}
-
-// collectAboveThreshold returns all node IDs whose energy ≥ threshold.
-func collectAboveThreshold(m *sync.Map, threshold float64) []string {
-	var ids []string
-	m.Range(func(k, v any) bool {
-		if e, ok := v.(float64); ok && e >= threshold {
-			ids = append(ids, k.(string))
-		}
-		return true
-	})
-	return ids
-}
-
-// loadEnergy safely reads a float64 from the sync.Map.
-func loadEnergy(m *sync.Map, id string) float64 {
-	if v, ok := m.Load(id); ok {
-		if e, ok := v.(float64); ok {
-			return e
-		}
-	}
-	return 0
-}
-
-// atomicAddEnergy accumulates energy using a compare-and-swap loop.
-func atomicAddEnergy(m *sync.Map, id string, delta float64) {
-	for {
-		existing, loaded := m.LoadOrStore(id, delta)
-		if !loaded {
-			return // stored fresh
-		}
-		old := existing.(float64)
-		new_ := old + delta
-		// CAS via atomic on the bits of float64
-		oldBits := math.Float64bits(old)
-		newBits := math.Float64bits(new_)
-		// Use sync.Map swap (Go 1.20+)
-		if swapped := syncMapSwapFloat64(m, id, old, new_); swapped {
-			_ = oldBits
-			_ = newBits
-			return
-		}
-	}
-}
-
-// syncMapSwapFloat64 does a compare-and-swap on float64 values in sync.Map.
-func syncMapSwapFloat64(m *sync.Map, id string, old, new_ float64) bool {
-	// Go 1.20 sync.Map doesn't have CompareAndSwap for interface{}.
-	// We serialize with a mutex approach: use CompareAndSwap where available.
-	// Fallback: store directly (slight energy imprecision under heavy concurrency, acceptable).
-	_ = unsafe.Sizeof(old) // suppress import
-	actual, _ := m.LoadOrStore(id, new_)
-	if actual.(float64) == old {
-		m.Store(id, new_)
-		return true
-	}
-	return false
 }
