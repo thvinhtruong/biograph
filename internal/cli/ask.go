@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/graph"
 	"github.com/truongvinh/biograph/internal/llm"
 	"github.com/truongvinh/biograph/internal/search"
 	"github.com/truongvinh/biograph/internal/storage"
@@ -16,14 +15,14 @@ import (
 
 var askCmd = &cobra.Command{
 	Use:   "ask <question>",
-	Short: "Ask a question using spreading activation retrieval",
+	Short: "Ask a question answered from your ingested notes",
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  runAsk,
 }
 
 func init() {
-	askCmd.Flags().Int("hops", 0, "Max traversal hops (default: from config)")
-	askCmd.Flags().String("course", "", "Filter to a specific course")
+	askCmd.Flags().String("course", "", "Filter context to a specific course")
+	askCmd.Flags().Int("limit", 10, "Number of nodes to retrieve as context")
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
@@ -31,70 +30,54 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.Load(viper.GetViper())
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
-	hops, _ := cmd.Flags().GetInt("hops")
-	if hops > 0 {
-		cfg.Activation.MaxHops = hops
-	}
 	course, _ := cmd.Flags().GetString("course")
+	limit, _ := cmd.Flags().GetInt("limit")
 
 	db, err := storage.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
-	// Step 1: Find starting nodes via hybrid router
-	router := search.NewRouter(db, cfg)
-	startNodes, err := router.Route(query, course)
-	if err != nil {
-		return fmt.Errorf("routing failed: %w", err)
-	}
-	if len(startNodes) == 0 {
-		fmt.Println("No relevant concepts found in your knowledge graph for this query.")
+	// Step 1: FTS5 retrieval
+	nodes, err := search.Search(db, query, course, limit)
+	if err != nil || len(nodes) == 0 {
+		if err != nil {
+			log.Warn().Err(err).Msg("search failed")
+		}
+		fmt.Println("No relevant concepts found for this query. Try ingesting more content first.")
 		return nil
 	}
 
-	// Step 2: Spreading activation
-	engine := graph.NewActivationEngine(db, cfg)
-	activated, err := engine.Activate(startNodes)
-	if err != nil {
-		return fmt.Errorf("activation failed: %w", err)
+	// Step 2: Assemble context from retrieved nodes
+	var sb strings.Builder
+	nodeIDs := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		sb.WriteString(fmt.Sprintf("## %s (%s)\n%s\n", n.DisplayName, n.Category, n.Definition))
+		if len(n.RawLatex) > 0 {
+			sb.WriteString("Equations: " + strings.Join(n.RawLatex, " | ") + "\n")
+		}
+		sb.WriteString("\n")
+		nodeIDs = append(nodeIDs, n.ID)
 	}
 
-	// Step 3: Pack context within token budget
-	packer := graph.NewContextPacker(cfg)
-	context := packer.Pack(activated)
-
-	// Step 4: Generate answer
+	// Step 3: Generate answer
 	client := llm.NewClient(cfg)
-	answer, err := client.Answer(query, context)
+	answer, err := client.Answer(query, sb.String())
 	if err != nil {
 		return fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	// Step 5: Reinforce activated paths (Hebbian learning)
-	activatedIDs := make([]string, len(activated))
-	for i, n := range activated {
-		activatedIDs[i] = n.ID
-	}
-	engine.Reinforce(activatedIDs)
+	fmt.Println(answer)
+	fmt.Printf("\n[Sources: %s]\n", strings.Join(nodeIDs, ", "))
 
-	// Step 6: Log query for audit trail
-	if err := db.LogQuery(query, activatedIDs); err != nil {
+	// Step 4: Log query
+	if err := db.LogQuery(query, nodeIDs); err != nil {
 		log.Warn().Err(err).Msg("query log failed")
 	}
-
-	// Step 7: Apply exam-aware temporal decay
-	pm := graph.NewPlasticityManager(db, cfg)
-	if err := pm.RunDecay(); err != nil {
-		log.Warn().Err(err).Msg("temporal decay failed")
-	}
-
-	fmt.Println(answer)
-	fmt.Printf("\nSources: %s\n", strings.Join(startNodes, ", "))
 
 	return nil
 }

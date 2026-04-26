@@ -1,17 +1,16 @@
 package ingestion
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/storage"
 )
 
-// MarkdownWriter generates Obsidian-compatible markdown notes.
+const scratchpadDelimiter = "<!-- biograph:scratchpad -->"
+
+// MarkdownWriter writes and safely updates First Thoughts lecture documents.
 type MarkdownWriter struct {
 	cfg *config.Config
 }
@@ -20,128 +19,70 @@ func NewMarkdownWriter(cfg *config.Config) *MarkdownWriter {
 	return &MarkdownWriter{cfg: cfg}
 }
 
-// WriteEntity writes a node's entity note into the Obsidian vault.
-func (w *MarkdownWriter) WriteEntity(node *storage.Node, rels []RelationDraft) error {
-	dir := filepath.Join(w.cfg.Vault.Path, w.cfg.Vault.EntityDir, node.Category)
+// WriteLecture writes the First Thoughts document for a lecture.
+// On re-ingest, the LLM-generated section is replaced while the scratchpad
+// (everything after the delimiter) is preserved unchanged.
+func (w *MarkdownWriter) WriteLecture(course, filename, markdown string) (string, error) {
+	dir := filepath.Join(w.cfg.Output.ContentDir, sanitiseCourse(course))
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+		return "", err
 	}
 
-	path := filepath.Join(dir, node.ID+".md")
-	content := w.renderEntityNote(node, rels)
-	return os.WriteFile(path, []byte(content), 0644)
-}
-
-// WriteSource writes a source PDF metadata note.
-func (w *MarkdownWriter) WriteSource(pdfName, course, examDate string, pageCount int) error {
-	dir := filepath.Join(w.cfg.Vault.Path, w.cfg.Vault.SourceDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	slug := strings.TrimSuffix(pdfName, filepath.Ext(pdfName))
-	slug = strings.ReplaceAll(slug, " ", "_")
+	slug := toSlug(filename)
 	path := filepath.Join(dir, slug+".md")
 
-	content := fmt.Sprintf(`---
-pdf: "%s"
-course: %s
-exam_date: %s
-page_count: %d
-ingested_at: %s
-tags:
-  - source
-  - %s
----
+	newContent := ensureScratchpad(markdown)
 
-# %s
+	existing, err := os.ReadFile(path)
+	if err == nil {
+		// File exists — preserve the scratchpad section
+		newContent = mergeWithExisting(newContent, string(existing))
+	}
 
-- **Course:** %s
-- **Pages:** %d
-- **Exam:** %s
-- **Ingested:** %s
-`,
-		pdfName, course, examDate, pageCount,
-		time.Now().Format("2006-01-02"),
-		course,
-		slug,
-		course, pageCount, examDate,
-		time.Now().Format("2006-01-02 15:04"),
-	)
-
-	return os.WriteFile(path, []byte(content), 0644)
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
-// SyncEntity re-writes an entity note from the current DB state (vault sync).
-func (w *MarkdownWriter) SyncEntity(node *storage.Node) error {
-	return w.WriteEntity(node, nil)
+// mergeWithExisting replaces the LLM section of an existing file while
+// keeping everything the user wrote below the scratchpad delimiter.
+func mergeWithExisting(newContent, existing string) string {
+	idx := strings.Index(existing, scratchpadDelimiter)
+	if idx < 0 {
+		// No delimiter found — overwrite entirely (first ingest or corrupted file)
+		return newContent
+	}
+
+	// Everything from the delimiter onward is the user's scratchpad
+	userSection := existing[idx+len(scratchpadDelimiter):]
+
+	// Replace the delimiter and below in newContent with the saved user section
+	newIdx := strings.Index(newContent, scratchpadDelimiter)
+	if newIdx < 0 {
+		return newContent + "\n\n" + scratchpadDelimiter + userSection
+	}
+	return newContent[:newIdx+len(scratchpadDelimiter)] + userSection
 }
 
-func (w *MarkdownWriter) renderEntityNote(node *storage.Node, rels []RelationDraft) string {
-	var sb strings.Builder
-
-	// YAML frontmatter
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("id: %s\n", node.ID))
-	sb.WriteString(fmt.Sprintf("display_name: \"%s\"\n", node.DisplayName))
-	sb.WriteString(fmt.Sprintf("category: %s\n", node.Category))
-	sb.WriteString(fmt.Sprintf("course: %s\n", node.Course))
-	if node.ExamDate != "" {
-		sb.WriteString(fmt.Sprintf("exam_date: %s\n", node.ExamDate))
+// ensureScratchpad guarantees the delimiter exists in the content.
+func ensureScratchpad(markdown string) string {
+	if strings.Contains(markdown, scratchpadDelimiter) {
+		return markdown
 	}
-	sb.WriteString(fmt.Sprintf("last_updated: %s\n", time.Now().Format("2006-01-02")))
-	sb.WriteString("tags:\n")
-	sb.WriteString("  - entity\n")
-	if node.Category != "" {
-		sb.WriteString(fmt.Sprintf("  - %s\n", node.Category))
-	}
-	if node.Course != "" {
-		sb.WriteString(fmt.Sprintf("  - %s\n", node.Course))
-	}
+	return markdown + "\n\n" + scratchpadDelimiter + "\n\n> _Space reserved for personal notes, coding implementations, and questions._\n"
+}
 
-	// Sources as YAML list
-	if len(node.Sources) > 0 {
-		sb.WriteString("sources:\n")
-		for _, s := range node.Sources {
-			sb.WriteString(fmt.Sprintf("  - pdf: \"%s\"\n    page: %d\n", s.PDF, s.Page))
-		}
-	}
-	sb.WriteString("---\n\n")
+// sanitiseCourse makes a course name safe for use as a directory name.
+func sanitiseCourse(course string) string {
+	replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_", ":", "_")
+	return strings.ToLower(replacer.Replace(course))
+}
 
-	// Title
-	sb.WriteString(fmt.Sprintf("# %s\n\n", node.DisplayName))
-
-	// Definition
-	sb.WriteString(node.Definition + "\n\n")
-
-	// LaTeX equations
-	if len(node.RawLatex) > 0 {
-		sb.WriteString("## Key Equations\n\n")
-		for _, eq := range node.RawLatex {
-			sb.WriteString(fmt.Sprintf("$$%s$$\n\n", eq))
-		}
-	}
-
-	// Connections (wikilinks for Obsidian graph view)
-	if len(rels) > 0 {
-		sb.WriteString("## Connections\n\n")
-		for _, r := range rels {
-			if r.Source == node.ID {
-				sb.WriteString(fmt.Sprintf("- [[%s]] — %s (strength: %.2f)\n", r.Target, r.Type, r.Strength))
-			} else if r.Target == node.ID {
-				sb.WriteString(fmt.Sprintf("- [[%s]] — %s (strength: %.2f)\n", r.Source, r.Type, r.Strength))
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	// Source references
-	if len(node.Sources) > 0 {
-		sb.WriteString("## Sources\n\n")
-		for _, s := range node.Sources {
-			sb.WriteString(fmt.Sprintf("- %s, Page %d\n", s.PDF, s.Page))
-		}
-	}
-
-	return sb.String()
+// toSlug converts a filename to a URL/filesystem-safe slug.
+func toSlug(name string) string {
+	// Strip extension
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
+	return replacer.Replace(name)
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/truongvinh/biograph/internal/config"
@@ -22,29 +23,109 @@ type Client struct {
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		httpClient: &http.Client{Timeout: 180 * time.Second},
 	}
 }
 
-// Answer generates a response to a user query given retrieved context.
-func (c *Client) Answer(query, context string) (string, error) {
-	system := `You are an academic assistant for a master's student.
-Answer the question using ONLY the provided knowledge graph context.
-Be precise, cite concepts by name, and include relevant equations.
-If the context doesn't contain enough information, say so clearly.`
+// NodeDraft is a concept extracted during synthesis, before storage.
+type NodeDraft struct {
+	ID          string   `json:"id"`
+	DisplayName string   `json:"display_name"`
+	Definition  string   `json:"definition"`
+	Category    string   `json:"category"`
+	RawLatex    []string `json:"raw_latex"`
+}
 
-	user := fmt.Sprintf("Knowledge Graph Context:\n---\n%s\n---\n\nQuestion: %s", context, query)
+// SynthesisResult is the combined output of one synthesis LLM call.
+type SynthesisResult struct {
+	Nodes    []NodeDraft
+	Markdown string
+}
+
+// Synthesize performs the combined "First Thoughts" pass over all extracted page
+// content for a single lecture. It returns both atomic nodes (for SQLite) and
+// the full First Thoughts markdown document (for the human ledger).
+func (c *Client) Synthesize(pageTexts []string, course, examDate, filename string) (*SynthesisResult, error) {
+	system := firstThoughtsSystemPrompt()
+
+	combined := strings.Join(pageTexts, "\n\n---\n\n")
+	user := fmt.Sprintf(`Course: %s
+Exam Date: %s
+Source file: %s
+
+<lecture_content>
+%s
+</lecture_content>
+
+First, output a JSON block with extracted nodes, then output the full First Thoughts markdown document.
+
+The JSON block must appear first, exactly like this:
+`+"```json"+`
+[
+  {
+    "id": "snake_case_id",
+    "display_name": "Human Readable Name",
+    "definition": "Precise academic definition",
+    "category": "algorithm|theorem|concept|model|technique",
+    "raw_latex": ["\\frac{...}{...}"]
+  }
+]
+`+"```"+`
+
+After the JSON block, output the complete First Thoughts markdown document following the structure in your instructions.`,
+		course, examDate, filename, combined)
+
+	raw, err := c.complete(system, user)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseSynthesisResponse(raw), nil
+}
+
+// parseSynthesisResponse splits the LLM response into nodes JSON and markdown.
+func parseSynthesisResponse(raw string) *SynthesisResult {
+	result := &SynthesisResult{}
+
+	// Extract JSON block between ```json and ```
+	jsonStart := strings.Index(raw, "```json")
+	jsonEnd := -1
+	if jsonStart >= 0 {
+		jsonEnd = strings.Index(raw[jsonStart+7:], "```")
+	}
+
+	if jsonStart >= 0 && jsonEnd >= 0 {
+		jsonContent := raw[jsonStart+7 : jsonStart+7+jsonEnd]
+		json.Unmarshal([]byte(strings.TrimSpace(jsonContent)), &result.Nodes)
+		// Markdown is everything after the closing ```
+		afterJSON := raw[jsonStart+7+jsonEnd+3:]
+		result.Markdown = strings.TrimSpace(afterJSON)
+	} else {
+		// No JSON block found — treat entire response as markdown
+		result.Markdown = strings.TrimSpace(raw)
+	}
+
+	return result
+}
+
+// Answer generates a response to a user query given retrieved context nodes.
+func (c *Client) Answer(query, context string) (string, error) {
+	system := `You are an academic assistant for a master's student at TU Darmstadt.
+Answer the question using ONLY the provided context from the student's notes.
+Be precise, use formal definitions, and include relevant equations in LaTeX ($$...$$).
+If the context is insufficient, say so explicitly rather than guessing.`
+
+	user := fmt.Sprintf("Context from study notes:\n---\n%s\n---\n\nQuestion: %s", context, query)
 	return c.complete(system, user)
 }
 
-// Extract calls the LLM with a text-based extraction prompt.
+// Extract calls the LLM with a text-based extraction prompt (used for simple pages).
 func (c *Client) Extract(prompt string) (string, error) {
 	return c.complete("You are a precise JSON-only academic knowledge extractor.", prompt)
 }
 
 // ExtractPage sends a single-page PDF (as raw bytes) to a vision model for
-// structured entity extraction. Claude and Gemini accept PDF natively.
-// OpenAI falls back to the text prompt since it requires images, not PDFs.
+// content extraction. Claude and Gemini accept PDF natively; OpenAI/Ollama fall back to text.
 func (c *Client) ExtractPage(pageBytes []byte, pageNum int, textPrompt string) (string, error) {
 	b64 := base64.StdEncoding.EncodeToString(pageBytes)
 	switch c.cfg.LLM.Provider {
@@ -53,14 +134,31 @@ func (c *Client) ExtractPage(pageBytes []byte, pageNum int, textPrompt string) (
 	case "gemini":
 		return c.geminiExtractPDF(b64, pageNum, textPrompt)
 	default:
-		// OpenAI and Ollama don't support raw PDF — fall back to text prompt
 		return c.Extract(textPrompt)
 	}
 }
 
-// Route asks the LLM to map a query to graph entity IDs.
-func (c *Client) Route(prompt string) (string, error) {
-	return c.complete("You are a knowledge graph router. Respond only with a JSON array.", prompt)
+// Chat sends a multi-turn conversation and returns the assistant reply.
+// Used by the quiz command for interactive sessions.
+func (c *Client) Chat(system string, history []ChatMessage) (string, error) {
+	switch c.cfg.LLM.Provider {
+	case "anthropic":
+		return c.anthropicChat(system, history)
+	case "openai":
+		return c.openaiChat(system, history)
+	case "gemini":
+		return c.geminiChatFallback(system, history)
+	case "ollama":
+		return c.ollamaChatFallback(system, history)
+	default:
+		return c.anthropicChat(system, history)
+	}
+}
+
+// ChatMessage is a single turn in a conversation.
+type ChatMessage struct {
+	Role    string // "user" or "assistant"
+	Content string
 }
 
 func (c *Client) complete(system, user string) (string, error) {
@@ -93,8 +191,8 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type   string          `json:"type"`
-	Text   string          `json:"text,omitempty"`
+	Type   string           `json:"type"`
+	Text   string           `json:"text,omitempty"`
 	Source *anthropicSource `json:"source,omitempty"`
 }
 
@@ -116,17 +214,30 @@ type anthropicResponse struct {
 func (c *Client) anthropicComplete(system, user string) (string, error) {
 	req := anthropicRequest{
 		Model:     c.model(),
-		MaxTokens: 4096,
+		MaxTokens: 8192,
 		System:    system,
 		Messages:  []anthropicMessage{{Role: "user", Content: user}},
 	}
 	return c.anthropicDo(req)
 }
 
-// anthropicExtractPDF sends a base64 PDF page as a document content block.
+func (c *Client) anthropicChat(system string, history []ChatMessage) (string, error) {
+	msgs := make([]anthropicMessage, len(history))
+	for i, m := range history {
+		msgs[i] = anthropicMessage{Role: m.Role, Content: m.Content}
+	}
+	req := anthropicRequest{
+		Model:     c.model(),
+		MaxTokens: 4096,
+		System:    system,
+		Messages:  msgs,
+	}
+	return c.anthropicDo(req)
+}
+
 func (c *Client) anthropicExtractPDF(b64 string, pageNum int, textPrompt string) (string, error) {
 	req := anthropicRequest{
-		Model:     c.vlmModel(),
+		Model:     c.model(),
 		MaxTokens: 4096,
 		System:    "You are a precise JSON-only academic knowledge extractor.",
 		Messages: []anthropicMessage{{
@@ -194,6 +305,7 @@ type geminiRequest struct {
 
 type geminiContent struct {
 	Parts []geminiPart `json:"parts"`
+	Role  string       `json:"role,omitempty"`
 }
 
 type geminiPart struct {
@@ -228,10 +340,9 @@ func (c *Client) geminiComplete(system, user string) (string, error) {
 			{Parts: []geminiPart{{Text: user}}},
 		},
 	}
-	return c.geminiDo(req, c.model())
+	return c.geminiDo(req)
 }
 
-// geminiExtractPDF sends a base64 PDF page as inline_data with MIME type application/pdf.
 func (c *Client) geminiExtractPDF(b64 string, pageNum int, textPrompt string) (string, error) {
 	req := geminiRequest{
 		SystemInstruction: &geminiContent{
@@ -239,27 +350,34 @@ func (c *Client) geminiExtractPDF(b64 string, pageNum int, textPrompt string) (s
 		},
 		Contents: []geminiContent{{
 			Parts: []geminiPart{
-				{
-					InlineData: &geminiBlob{
-						MimeType: "application/pdf",
-						Data:     b64,
-					},
-				},
-				{
-					Text: fmt.Sprintf("Focus on page %d of the document above.\n\n%s", pageNum, textPrompt),
-				},
+				{InlineData: &geminiBlob{MimeType: "application/pdf", Data: b64}},
+				{Text: fmt.Sprintf("Focus on page %d of the document above.\n\n%s", pageNum, textPrompt)},
 			},
 		}},
 	}
-	return c.geminiDo(req, c.vlmModel())
+	return c.geminiDo(req)
 }
 
-func (c *Client) geminiDo(req geminiRequest, model string) (string, error) {
+func (c *Client) geminiChatFallback(system string, history []ChatMessage) (string, error) {
+	var sb strings.Builder
+	sb.WriteString(system)
+	sb.WriteString("\n\n")
+	for _, m := range history {
+		sb.WriteString(m.Role)
+		sb.WriteString(": ")
+		sb.WriteString(m.Content)
+		sb.WriteString("\n\n")
+	}
+	return c.geminiComplete(system, sb.String())
+}
+
+func (c *Client) geminiDo(req geminiRequest) (string, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("GEMINI_API_KEY not set")
 	}
 
+	model := c.model()
 	if model == "" {
 		model = "gemini-2.0-flash"
 	}
@@ -320,6 +438,10 @@ type openaiResponse struct {
 }
 
 func (c *Client) openaiComplete(system, user string) (string, error) {
+	return c.openaiChat(system, []ChatMessage{{Role: "user", Content: user}})
+}
+
+func (c *Client) openaiChat(system string, history []ChatMessage) (string, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENAI_API_KEY not set")
@@ -330,14 +452,13 @@ func (c *Client) openaiComplete(system, user string) (string, error) {
 		model = "gpt-4o-mini"
 	}
 
-	body, _ := json.Marshal(openaiRequest{
-		Model: model,
-		Messages: []openaiMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
-	})
+	msgs := make([]openaiMessage, 0, len(history)+1)
+	msgs = append(msgs, openaiMessage{Role: "system", Content: system})
+	for _, m := range history {
+		msgs = append(msgs, openaiMessage{Role: m.Role, Content: m.Content})
+	}
 
+	body, _ := json.Marshal(openaiRequest{Model: model, Messages: msgs})
 	httpReq, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -378,17 +499,26 @@ type ollamaResponse struct {
 }
 
 func (c *Client) ollamaComplete(system, user string) (string, error) {
+	return c.ollamaChatFallback(system, []ChatMessage{{Role: "user", Content: user}})
+}
+
+func (c *Client) ollamaChatFallback(system string, history []ChatMessage) (string, error) {
 	model := c.model()
 	if model == "" {
 		model = "llama3"
 	}
 
-	body, _ := json.Marshal(ollamaRequest{
-		Model:  model,
-		Prompt: system + "\n\n" + user,
-		Stream: false,
-	})
+	var sb strings.Builder
+	sb.WriteString(system)
+	sb.WriteString("\n\n")
+	for _, m := range history {
+		sb.WriteString(m.Role)
+		sb.WriteString(": ")
+		sb.WriteString(m.Content)
+		sb.WriteString("\n\n")
+	}
 
+	body, _ := json.Marshal(ollamaRequest{Model: model, Prompt: sb.String(), Stream: false})
 	httpReq, err := http.NewRequest("POST", "http://localhost:11434/api/generate", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -427,13 +557,6 @@ func (c *Client) model() string {
 	}
 }
 
-func (c *Client) vlmModel() string {
-	if c.cfg.LLM.VLMModel != "" {
-		return c.cfg.LLM.VLMModel
-	}
-	return c.model()
-}
-
 // doWithRetry executes an HTTP request with exponential backoff.
 // body is passed separately so it can be re-read on retry.
 func (c *Client) doWithRetry(req *http.Request, body []byte) (*http.Response, error) {
@@ -462,4 +585,65 @@ func (c *Client) doWithRetry(req *http.Request, body []byte) (*http.Response, er
 		return resp, nil
 	}
 	return nil, fmt.Errorf("all retries failed: %w", lastErr)
+}
+
+// firstThoughtsSystemPrompt returns the system prompt for the synthesis pass.
+func firstThoughtsSystemPrompt() string {
+	return `You are an elite academic AI assistant specializing in Artificial Intelligence,
+Machine Learning, and theoretical Computer Science.
+
+Your task is to ingest raw text and visual data from a university lecture slide
+or academic paper and synthesize it into a highly structured, rigorous "First
+Thoughts" Markdown ledger.
+
+The user is a Master's student at TU Darmstadt. The grading in this program
+relies heavily on high-stakes, theoretical written exams. Therefore, your
+synthesis MUST prioritize formal definitions, mathematical rigor, algorithmic
+complexity, and edge cases over high-level generalizations.
+
+You will output TWO parts in a single response:
+
+PART 1 — a ` + "```json" + ` block containing an array of atomic concept nodes.
+Each node: { "id": "snake_case", "display_name": "...", "definition": "...",
+"category": "algorithm|theorem|concept|model|technique", "raw_latex": ["..."] }
+Extract 5–20 of the most important concepts. Use empty array for raw_latex if none.
+
+PART 2 — the complete First Thoughts Markdown document using this exact structure:
+
+# [Topic / Lecture Title]
+
+## 1. Executive Intuition
+
+Provide a dense, 2-3 sentence summary of the core problem this lecture solves.
+What is the gap in previous knowledge that this specific concept addresses?
+
+## 2. Core Theoretical Concepts
+
+Extract the primary algorithms, architectures, or theorems. For each:
+
+- **Formal Definition:** State the concept rigorously.
+- **Mechanism:** How does it work? Be concise.
+- **Assumptions/Constraints:** Under what conditions does this hold true or fail?
+
+## 3. Mathematical Foundations
+
+Extract all key equations, derivations, and proofs.
+
+- Format all math using LaTeX blocks (e.g., $$ E = mc^2 $$).
+- Define every variable used in the equations explicitly.
+- If a proof is outlined, summarize the logical steps.
+
+## 4. 📝 Exam Review (High-Yield Extraction)
+
+Identify the most highly testable material. Focus on:
+
+- **Computational Complexity:** Time and space complexities (Big-O).
+- **Comparative Analysis:** Why use Method A over Method B?
+- **Known Limitations/Failure Modes:** Where does the math break down?
+
+## 5. Student Scratchpad & Inquiries
+
+<!-- biograph:scratchpad -->
+
+> _Space reserved for personal notes, coding implementations, and questions._`
 }

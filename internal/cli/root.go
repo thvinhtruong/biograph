@@ -15,10 +15,9 @@ var verbose bool
 
 var rootCmd = &cobra.Command{
 	Use:   "biograph",
-	Short: "BioGraph — associative knowledge graph for lecture PDFs",
-	Long: `BioGraph builds a biological-inspired knowledge graph from your lecture PDFs.
-It uses spreading activation and Hebbian learning to surface the most
-relevant concepts when you ask questions about your study material.`,
+	Short: "BioGraph — AI study copilot for lecture PDFs",
+	Long: `BioGraph ingests lecture PDFs, synthesises First Thoughts study ledgers,
+and lets you ask questions or run interactive quiz sessions from your terminal.`,
 }
 
 // Execute runs the root command.
@@ -37,8 +36,9 @@ func init() {
 
 	rootCmd.AddCommand(ingestCmd)
 	rootCmd.AddCommand(askCmd)
-	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(quizCmd)
 }
 
 func initConfig() {

@@ -65,14 +65,10 @@ func (c *PageClassifier) IsSimple(pt PageText) bool {
 
 // textToExtractedContent converts a simple (text-only) page into ExtractedContent.
 // For text-only pages, we do minimal entity extraction without VLM.
-func textToExtractedContent(pt PageText, course, examDate string) ExtractedContent {
+func textToExtractedContent(pt PageText) ExtractedContent {
 	return ExtractedContent{
-		PageNumber:    pt.PageNumber,
-		ContentSummary: truncateText(pt.Text, 500),
-		Entities:      nil, // populated by VLM; text-only pages skip entity extraction
-		Relationships: nil,
-		RawLatex:      nil,
-		VisualContext: "",
+		PageNumber:     pt.PageNumber,
+		ContentSummary: truncateText(pt.Text, 800),
 	}
 }
 

@@ -17,23 +17,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Synaptic edges between entities
-CREATE TABLE IF NOT EXISTS edges (
-    source_id  TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    target_id  TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    weight     REAL NOT NULL DEFAULT 0.5,
-    edge_type  TEXT NOT NULL DEFAULT 'related_to',
-    last_fired TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (source_id, target_id)
-);
-
--- Indexes for efficient graph traversal
-CREATE INDEX IF NOT EXISTS idx_edges_source  ON edges(source_id);
-CREATE INDEX IF NOT EXISTS idx_edges_target  ON edges(target_id);
-CREATE INDEX IF NOT EXISTS idx_edges_weight  ON edges(weight DESC);
-CREATE INDEX IF NOT EXISTS idx_nodes_course  ON nodes(course);
-CREATE INDEX IF NOT EXISTS idx_nodes_exam    ON nodes(exam_date);
+CREATE INDEX IF NOT EXISTS idx_nodes_course ON nodes(course);
 
 -- FTS5 virtual table for full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
@@ -64,11 +48,11 @@ CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
     VALUES (new.rowid, new.id, new.display_name, new.definition, new.category, new.course);
 END;
 
--- Query history for Hebbian learning
+-- Query history
 CREATE TABLE IF NOT EXISTS query_log (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     query_text     TEXT NOT NULL,
-    activated_nodes TEXT NOT NULL,
+    matched_nodes  TEXT NOT NULL DEFAULT '[]',
     timestamp      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `

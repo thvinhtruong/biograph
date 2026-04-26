@@ -14,7 +14,7 @@ import (
 
 var ingestCmd = &cobra.Command{
 	Use:   "ingest <path-to-pdf>",
-	Short: "Ingest a lecture PDF into the knowledge graph",
+	Short: "Ingest a lecture PDF: extract, synthesise, and write First Thoughts ledger",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runIngest,
 }
@@ -22,9 +22,8 @@ var ingestCmd = &cobra.Command{
 func init() {
 	ingestCmd.Flags().String("course", "", "Course tag (e.g., deep_learning)")
 	ingestCmd.Flags().String("exam-date", "", "Exam date YYYY-MM-DD (e.g., 2026-06-15)")
-	ingestCmd.Flags().Bool("force-vlm", false, "Skip text-first pass, send all pages to VLM")
-	ingestCmd.Flags().Int("workers", 0, "Number of concurrent VLM workers (default: num_cpu)")
-	ingestCmd.Flags().String("provider", "", "VLM provider: openai, anthropic, ollama")
+	ingestCmd.Flags().Int("workers", 0, "Concurrent VLM workers (default: num_cpu)")
+	ingestCmd.Flags().String("provider", "", "LLM provider override: anthropic, gemini, openai, ollama")
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
@@ -36,18 +35,14 @@ func runIngest(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.Load(viper.GetViper())
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	course, _ := cmd.Flags().GetString("course")
 	examDate, _ := cmd.Flags().GetString("exam-date")
-	forceVLM, _ := cmd.Flags().GetBool("force-vlm")
 	workers, _ := cmd.Flags().GetInt("workers")
 	provider, _ := cmd.Flags().GetString("provider")
 
-	if course == "" {
-		course = viper.GetString("ingestion.default_course")
-	}
 	if provider != "" {
 		cfg.LLM.Provider = provider
 	}
@@ -57,32 +52,27 @@ func runIngest(cmd *cobra.Command, args []string) error {
 
 	db, err := storage.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-
-	opts := ingestion.Options{
-		PDFPath:  pdfPath,
-		Course:   course,
-		ExamDate: examDate,
-		ForceVLM: forceVLM,
-		Config:   cfg,
-	}
 
 	log.Info().Str("pdf", pdfPath).Str("course", course).Msg("starting ingestion")
 
 	pipeline := ingestion.NewPipeline(db, cfg)
-	result, err := pipeline.Run(opts)
+	result, err := pipeline.Run(ingestion.Options{
+		PDFPath:  pdfPath,
+		Course:   course,
+		ExamDate: examDate,
+		Config:   cfg,
+	})
 	if err != nil {
 		return fmt.Errorf("ingestion failed: %w", err)
 	}
 
 	fmt.Printf("\nIngestion complete:\n")
-	fmt.Printf("  Pages processed:  %d\n", result.PagesProcessed)
-	fmt.Printf("  VLM pages:        %d\n", result.VLMPages)
-	fmt.Printf("  Entities found:   %d\n", result.EntitiesFound)
-	fmt.Printf("  Edges created:    %d\n", result.EdgesCreated)
-	fmt.Printf("  Notes written:    %d\n", result.NotesWritten)
+	fmt.Printf("  Pages processed:  %d (%d via VLM)\n", result.PagesProcessed, result.VLMPages)
+	fmt.Printf("  Nodes stored:     %d\n", result.NodesStored)
+	fmt.Printf("  Ledger written:   %s\n", result.OutputPath)
 
 	return nil
 }

@@ -13,7 +13,7 @@ import (
 
 var searchCmd = &cobra.Command{
 	Use:   "search <term>",
-	Short: "Full-text search across the knowledge graph",
+	Short: "Full-text search across ingested concepts",
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  runSearch,
 }
@@ -30,38 +30,31 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.Load(viper.GetViper())
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	db, err := storage.Open(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
-	idx, err := search.OpenIndex(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to open search index: %w", err)
-	}
-	defer idx.Close()
-
-	results, err := idx.Search(term, course, limit)
+	nodes, err := search.Search(db, term, course, limit)
 	if err != nil {
 		return fmt.Errorf("search failed: %w", err)
 	}
 
-	if len(results) == 0 {
+	if len(nodes) == 0 {
 		fmt.Println("No results found.")
 		return nil
 	}
 
-	fmt.Printf("Found %d results for %q:\n\n", len(results), term)
-	for i, r := range results {
-		fmt.Printf("%d. [%.2f] %s (%s)\n", i+1, r.Score, r.DisplayName, r.Course)
-		fmt.Printf("   %s\n\n", truncate(r.Definition, 120))
+	fmt.Printf("Found %d result(s) for %q:\n\n", len(nodes), term)
+	for i, n := range nodes {
+		fmt.Printf("%d. %s [%s] — %s\n", i+1, n.DisplayName, n.Category, n.Course)
+		fmt.Printf("   %s\n\n", truncate(n.Definition, 120))
 	}
 
-	_ = db
 	return nil
 }
 
