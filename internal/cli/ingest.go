@@ -7,9 +7,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/ingestion"
-	"github.com/truongvinh/biograph/internal/storage"
+	"github.com/truongvinh/my-tu-brain/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/ingestion"
+	"github.com/truongvinh/my-tu-brain/internal/storage"
 )
 
 var ingestCmd = &cobra.Command{

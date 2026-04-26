@@ -7,9 +7,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/schollz/progressbar/v3"
-	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/llm"
-	"github.com/truongvinh/biograph/internal/storage"
+	"github.com/truongvinh/my-tu-brain/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/llm"
+	"github.com/truongvinh/my-tu-brain/internal/storage"
 )
 
 // Options controls a single ingestion run.

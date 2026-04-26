@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/storage"
+	"github.com/truongvinh/my-tu-brain/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/storage"
 )
 
 var statusCmd = &cobra.Command{
@@ -32,7 +32,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetch stats: %w", err)
 	}
 
-	fmt.Println("=== BioGraph Status ===")
+	fmt.Println("=== My TU Brain Status ===")
 	fmt.Printf("Concepts indexed:  %d\n", stats.NodeCount)
 	fmt.Printf("Courses:           %d\n", stats.CourseCount)
 	fmt.Printf("Queries logged:    %d\n", stats.QueryCount)

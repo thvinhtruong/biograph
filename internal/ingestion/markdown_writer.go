@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/truongvinh/biograph/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/config"
 )
 
-const scratchpadDelimiter = "<!-- biograph:scratchpad -->"
+const scratchpadDelimiter = "<!-- my-tu-brain:scratchpad -->"
 
 // MarkdownWriter writes and safely updates First Thoughts lecture documents.
 type MarkdownWriter struct {

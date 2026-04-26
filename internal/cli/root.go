@@ -14,9 +14,9 @@ var cfgFile string
 var verbose bool
 
 var rootCmd = &cobra.Command{
-	Use:   "biograph",
-	Short: "BioGraph — AI study copilot for lecture PDFs",
-	Long: `BioGraph ingests lecture PDFs, synthesises First Thoughts study ledgers,
+	Use:   "my-tu-brain",
+	Short: "My TU Brain — AI study copilot for lecture PDFs",
+	Long: `My TU Brain ingests lecture PDFs, synthesises First Thoughts study ledgers,
 and lets you ask questions or run interactive quiz sessions from your terminal.`,
 }
 
@@ -31,7 +31,7 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./biograph.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./my-tu-brain.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging")
 
 	rootCmd.AddCommand(ingestCmd)
@@ -45,7 +45,7 @@ func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		viper.SetConfigName("biograph")
+		viper.SetConfigName("my-tu-brain")
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(".")
 		viper.AddConfigPath("$HOME")

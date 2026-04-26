@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/truongvinh/biograph/internal/storage"
+	"github.com/truongvinh/my-tu-brain/internal/storage"
 )
 
 const defaultLimit = 10

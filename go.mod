@@ -1,4 +1,4 @@
-module github.com/truongvinh/biograph
+module github.com/truongvinh/my-tu-brain
 
 go 1.25.1
 

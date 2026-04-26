@@ -1,4 +1,4 @@
-# BioGraph
+# My TU Brain
 
 A Go CLI study copilot that ingests lecture PDFs, generates structured "First Thoughts" study ledgers, and lets you ask questions or run interactive exam sessions — all from your terminal.
 
@@ -8,7 +8,7 @@ Built for the rigours of an AI/ML Master's program where a single high-stakes wr
 
 ## How it works
 
-1. **Ingest** — Drop a PDF. BioGraph extracts text page-by-page. Complex pages (equations, figures, tables) are sent as raw PDF bytes to a vision model. All extracted content is then fed into **one synthesis call** that returns:
+1. **Ingest** — Drop a PDF. My TU Brain extracts text page-by-page. Complex pages (equations, figures, tables) are sent as raw PDF bytes to a vision model. All extracted content is then fed into **one synthesis call** that returns:
    - Atomic concept nodes → stored in SQLite + FTS5 (powers `ask`)
    - A structured "First Thoughts" markdown ledger → written to `courses/<course>/`
 
@@ -43,12 +43,12 @@ $$ \nabla_\theta \mathcal{L} = ... $$
 
 ## 5. Student Scratchpad & Inquiries
 
-<!-- biograph:scratchpad -->
+<!-- my-tu-brain:scratchpad -->
 
 > Your personal notes go here.
 ```
 
-On re-ingest (e.g. updated slides), the LLM section is regenerated but **everything you wrote below `<!-- biograph:scratchpad -->`** is preserved exactly.
+On re-ingest (e.g. updated slides), the LLM section is regenerated but **everything you wrote below `<!-- my-tu-brain:scratchpad -->`** is preserved exactly.
 
 ---
 
@@ -91,7 +91,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A([biograph quiz --course X]) --> B[Read lecture .md files\nstrip scratchpad]
+    A([my-tu-brain quiz --course X]) --> B[Read lecture .md files\nstrip scratchpad]
     B --> C[Reverse-Interrogation\nsystem prompt + ledger context]
     C --> D[LLM asks question]
     D --> E([Student answers in terminal])
@@ -131,7 +131,7 @@ export GEMINI_API_KEY="AIza..."
 ## Installation
 
 ```bash
-CGO_ENABLED=1 go build -o ./build/biograph ./cmd/biograph
+CGO_ENABLED=1 go build -o ./build/my-tu-brain ./cmd/my-tu-brain
 # or
 make build
 ```
@@ -140,14 +140,14 @@ make build
 
 ## Configuration
 
-`biograph.yaml` is loaded from the current directory (or `--config` flag):
+`my-tu-brain.yaml` is loaded from the current directory (or `--config` flag):
 
 ```yaml
 output:
   content_dir: "./courses"   # where First Thoughts ledgers are written
 
 database:
-  path: "./biograph.db"
+  path: "./my-tu-brain.db"
 
 llm:
   provider: "anthropic"                  # anthropic | gemini | openai | ollama
@@ -172,7 +172,7 @@ All fields have defaults — only set what you need to change.
 ### Ingest a lecture PDF
 
 ```bash
-biograph ingest lecture03.pdf --course deep_learning --exam-date 2026-06-15
+my-tu-brain ingest lecture03.pdf --course deep_learning --exam-date 2026-06-15
 ```
 
 | Flag | Description |
@@ -187,19 +187,19 @@ Output: `courses/deep_learning/lecture03.md`
 ### Ask a question
 
 ```bash
-biograph ask "How does backpropagation use the chain rule?"
-biograph ask "Explain batch normalization" --course deep_learning
-biograph ask "What is the vanishing gradient problem?" --limit 15
+my-tu-brain ask "How does backpropagation use the chain rule?"
+my-tu-brain ask "Explain batch normalization" --course deep_learning
+my-tu-brain ask "What is the vanishing gradient problem?" --limit 15
 ```
 
 ### Quiz yourself
 
 ```bash
 # Quiz on all lectures in a course
-biograph quiz --course deep_learning
+my-tu-brain quiz --course deep_learning
 
 # Quiz on a specific lecture
-biograph quiz --course deep_learning --lecture "Lecture_03"
+my-tu-brain quiz --course deep_learning --lecture "Lecture_03"
 ```
 
 The LLM acts as a TU Darmstadt examiner. Questions escalate from conceptual warm-up to full mathematical derivations. Type `q` or `quit` to end the session.
@@ -207,14 +207,14 @@ The LLM acts as a TU Darmstadt examiner. Questions escalate from conceptual warm
 ### Search concepts
 
 ```bash
-biograph search "gradient descent"
-biograph search "loss function" --course deep_learning --limit 5
+my-tu-brain search "gradient descent"
+my-tu-brain search "loss function" --course deep_learning --limit 5
 ```
 
 ### Status
 
 ```bash
-biograph status
+my-tu-brain status
 ```
 
 ---
@@ -230,7 +230,7 @@ courses/
 └── probabilistic_models/
     └── Lecture_01_Foundations.md
 
-biograph.db       — SQLite: concept nodes + FTS5 index (powers ask/search)
+my-tu-brain.db       — SQLite: concept nodes + FTS5 index (powers ask/search)
 ```
 
 Edit your notes freely inside the scratchpad section. They survive re-ingestion.
@@ -255,16 +255,16 @@ make clean
 ## Project structure
 
 ```
-biograph/
-├── cmd/biograph/main.go
+my-tu-brain/
+├── cmd/my-tu-brain/main.go
 ├── internal/
 │   ├── cli/
 │   │   ├── root.go         — Cobra root, config init, logger
-│   │   ├── ingest.go       — biograph ingest
-│   │   ├── ask.go          — biograph ask
-│   │   ├── search.go       — biograph search
-│   │   ├── status.go       — biograph status
-│   │   └── quiz.go         — biograph quiz (interactive multi-turn)
+│   │   ├── ingest.go       — my-tu-brain ingest
+│   │   ├── ask.go          — my-tu-brain ask
+│   │   ├── search.go       — my-tu-brain search
+│   │   ├── status.go       — my-tu-brain status
+│   │   └── quiz.go         — my-tu-brain quiz (interactive multi-turn)
 │   ├── config/config.go    — typed config with defaults
 │   ├── storage/
 │   │   ├── sqlite.go       — DB open, migrations, stats, query log
@@ -279,7 +279,7 @@ biograph/
 │   ├── search/fts.go       — FTS5 search wrapper
 │   └── llm/client.go       — Anthropic / Gemini / OpenAI / Ollama client
 │                              Synthesize() · Answer() · Chat() · ExtractPage()
-├── biograph.yaml
+├── my-tu-brain.yaml
 └── Makefile
 ```
 
@@ -300,4 +300,4 @@ Start the daemon first: `ollama serve`. Pull a model: `ollama pull llama3`.
 Verify `GEMINI_API_KEY` is set and `llm.model` is a valid Gemini model (e.g. `gemini-2.0-flash`).
 
 **Re-ingest overwrote my notes**
-It shouldn't — the scratchpad delimiter `<!-- biograph:scratchpad -->` protects everything below it. If the delimiter is missing from your file, add it manually and re-ingest.
+It shouldn't — the scratchpad delimiter `<!-- my-tu-brain:scratchpad -->` protects everything below it. If the delimiter is missing from your file, add it manually and re-ingest.

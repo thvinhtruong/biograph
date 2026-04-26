@@ -1,6 +1,6 @@
-BINARY := biograph
+BINARY := my-tu-brain
 BUILD_DIR := ./build
-CMD_PATH := ./cmd/biograph
+CMD_PATH := ./cmd/my-tu-brain
 
 .PHONY: build run clean test tidy
 
@@ -11,7 +11,7 @@ run: build
 	$(BUILD_DIR)/$(BINARY) $(ARGS)
 
 clean:
-	rm -rf $(BUILD_DIR) biograph.db biograph.bleve
+	rm -rf $(BUILD_DIR) my-tu-brain.db
 
 test:
 	go test ./...

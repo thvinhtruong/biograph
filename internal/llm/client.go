@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/truongvinh/biograph/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/config"
 )
 
 // Client is a minimal LLM API abstraction supporting Anthropic, OpenAI, Gemini, and Ollama.
@@ -643,7 +643,7 @@ Identify the most highly testable material. Focus on:
 
 ## 5. Student Scratchpad & Inquiries
 
-<!-- biograph:scratchpad -->
+<!-- my-tu-brain:scratchpad -->
 
 > _Space reserved for personal notes, coding implementations, and questions._`
 }

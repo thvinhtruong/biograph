@@ -7,7 +7,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/truongvinh/biograph/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/config"
 )
 
 // DB wraps a SQLite connection with all biograph operations.

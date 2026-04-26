@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
-	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/llm"
+	"github.com/truongvinh/my-tu-brain/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/llm"
 )
 
 // ExtractedContent is the structured output from a VLM call for one page.

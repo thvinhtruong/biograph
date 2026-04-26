@@ -8,7 +8,7 @@ import (
 
 	"github.com/ledongthuc/pdf"
 	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/truongvinh/biograph/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/config"
 )
 
 // PageText holds the raw text content of a single PDF page.

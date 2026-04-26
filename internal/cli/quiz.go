@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/llm"
+	"github.com/truongvinh/my-tu-brain/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/llm"
 )
 
 var quizCmd = &cobra.Command{
@@ -65,7 +65,7 @@ func runQuiz(cmd *cobra.Command, args []string) error {
 		}
 		content := string(raw)
 		// Strip scratchpad so personal notes don't confuse the examiner
-		if idx := strings.Index(content, "<!-- biograph:scratchpad -->"); idx >= 0 {
+		if idx := strings.Index(content, "<!-- my-tu-brain:scratchpad -->"); idx >= 0 {
 			content = content[:idx]
 		}
 		sb.WriteString(content)

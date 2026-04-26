@@ -1,0 +1,19 @@
+output:
+  content_dir: "./courses"   # where First Thoughts ledgers are written
+
+database:
+  path: "./my-tu-brain.db"
+
+llm:
+  provider: "anthropic"                  # anthropic | gemini | openai | ollama
+  model: "claude-haiku-4-5-20251001"
+  api_key_env: "ANTHROPIC_API_KEY"
+  max_retries: 3
+
+  # Gemini example:
+  # provider: "gemini"
+  # model: "gemini-2.0-flash"
+  # api_key_env: "GEMINI_API_KEY"
+
+ingestion:
+  workers: 8     # concurrent VLM workers (default: num CPU)

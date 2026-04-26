@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config is the root configuration structure mirroring biograph.yaml.
+// Config is the root configuration structure mirroring my-tu-brain.yaml.
 type Config struct {
 	Output   OutputConfig   `mapstructure:"output"`
 	Database DatabaseConfig `mapstructure:"database"`
@@ -52,7 +52,7 @@ func Load(v *viper.Viper) (*Config, error) {
 
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("output.content_dir", "./courses")
-	v.SetDefault("database.path", "./biograph.db")
+	v.SetDefault("database.path", "./my-tu-brain.db")
 	v.SetDefault("llm.provider", "anthropic")
 	v.SetDefault("llm.model", "claude-haiku-4-5-20251001")
 	v.SetDefault("llm.api_key_env", "ANTHROPIC_API_KEY")

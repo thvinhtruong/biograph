@@ -7,10 +7,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/truongvinh/biograph/internal/config"
-	"github.com/truongvinh/biograph/internal/llm"
-	"github.com/truongvinh/biograph/internal/search"
-	"github.com/truongvinh/biograph/internal/storage"
+	"github.com/truongvinh/my-tu-brain/internal/config"
+	"github.com/truongvinh/my-tu-brain/internal/llm"
+	"github.com/truongvinh/my-tu-brain/internal/search"
+	"github.com/truongvinh/my-tu-brain/internal/storage"
 )
 
 var askCmd = &cobra.Command{
