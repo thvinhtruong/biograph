@@ -1,29 +1,35 @@
 # Exam Prep Dashboard
 
-## High-Priority Concepts (by activation weight)
+## Active Exam Radar
+
+Concepts tied to exams within the next 30 days.
 
 ```dataview
-TABLE activation_weight AS "Weight", edge_count AS "Connections", sources AS "Sources"
+TABLE course AS "Course", exam_date AS "Exam Date", category AS "Type"
 FROM "entities"
-WHERE exam_date != null
-SORT activation_weight DESC
-LIMIT 20
+WHERE exam_date != null AND exam_date <= (date(today) + dur(30 days)) AND exam_date >= date(today)
+SORT exam_date ASC
 ```
 
-## Recently Updated
+## Core Knowledge Hubs
+
+Highest-connectivity nodes — attract the most energy during spreading activation.
 
 ```dataview
-LIST
+TABLE category AS "Type", course AS "Course", length(file.inlinks) AS "Inbound Edges"
 FROM "entities"
-SORT last_updated DESC
+WHERE length(file.inlinks) > 0
+SORT length(file.inlinks) DESC
 LIMIT 10
 ```
 
-## Weakly Connected (may need review)
+## Orphaned Nodes
+
+Entities with no connections — candidates for manual linking or review.
 
 ```dataview
-TABLE activation_weight AS "Weight", edge_count AS "Connections"
+TABLE category AS "Type", course AS "Course"
 FROM "entities"
-WHERE activation_weight < 0.3
-SORT activation_weight ASC
+WHERE length(file.inlinks) = 0 AND length(file.outlinks) = 0
+SORT last_updated DESC
 ```
